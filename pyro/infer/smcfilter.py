@@ -68,9 +68,21 @@ class SMCFilter(object):
             model = poutine.replay(self.model.step, guide_trace)
             model_trace = poutine.trace(model).get_trace(*args, **kwargs)
 
+        print(_extract_samples(model_trace))
+        print("================================")
         self._update_weights(model_trace, guide_trace)
         self._values.update(_extract_samples(model_trace))
         self._maybe_importance_resample()
+
+    def forecast(*args, **kwargs):
+        """
+        Take a forecasting step using 
+        """
+        with poutine.block(), self.particle_plate:
+            model_trace = poutine.trace(self.model.forecast).get_trace(*args, **kwargs)
+
+        return _extract_sample(model_trace), self._log_weights
+
 
     def get_values_and_log_weights(self):
         """
@@ -78,7 +90,6 @@ class SMCFilter(object):
         :returns: the values and unnormalized log weights.
         :rtype: tuple of dict and floats where the dict is a key of name of latent to value of latent.
         """
-        # TODO: Be clear that these are unnormalized weights. May want to normalize later.
         return self._values, self._log_weights
 
     def get_empirical(self):
