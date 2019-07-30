@@ -15,6 +15,7 @@ from pyro.distributions.rejector import Rejector
 from pyro.distributions.relaxed_straight_through import (RelaxedBernoulliStraightThrough,
                                                          RelaxedOneHotCategoricalStraightThrough)
 from pyro.distributions.spanning_tree import SpanningTree
+from pyro.distributions.summary import BetaBernoulliSummary, Summary, NIGNormalRegressionSummary
 from pyro.distributions.torch import *  # noqa F403
 from pyro.distributions.torch import __all__ as torch_dists
 from pyro.distributions.torch_distribution import TorchDistribution
@@ -28,6 +29,7 @@ from pyro.distributions.transforms import * # noqa F403
 
 __all__ = [
     "AVFMultivariateNormal",
+    "BetaBernoulliSummary",
     "BetaBinomial",
     "Delta",
     "DirichletMultinomial",
@@ -44,11 +46,13 @@ __all__ = [
     "MaskedMixture",
     "MixtureOfDiagNormals",
     "MixtureOfDiagNormalsSharedCovariance",
+    "NIGNormalRegressionSummary",
     "OMTMultivariateNormal",
     "Rejector",
     "RelaxedBernoulliStraightThrough",
     "RelaxedOneHotCategoricalStraightThrough",
     "SpanningTree",
+    "Summary",
     "TorchDistribution",
     "TransformModule",
     "VonMises",
