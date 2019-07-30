@@ -74,7 +74,7 @@ class SMCFilter(object):
         self._values.update(_extract_samples(model_trace))
         self._maybe_importance_resample()
 
-    def forecast(*args, **kwargs):
+    def forecast(self, *args, **kwargs):
         """
         Take a forecasting step using 
         """
