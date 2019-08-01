@@ -68,8 +68,6 @@ class SMCFilter(object):
             model = poutine.replay(self.model.step, guide_trace)
             model_trace = poutine.trace(model).get_trace(*args, **kwargs)
 
-        print(_extract_samples(model_trace))
-        print("================================")
         self._update_weights(model_trace, guide_trace)
         self._values.update(_extract_samples(model_trace))
         self._maybe_importance_resample()
@@ -81,7 +79,7 @@ class SMCFilter(object):
         with poutine.block(), self.particle_plate:
             model_trace = poutine.trace(self.model.forecast).get_trace(*args, **kwargs)
 
-        return _extract_sample(model_trace), self._log_weights
+        return _extract_samples(model_trace), self._log_weights
 
 
     def get_values_and_log_weights(self):
