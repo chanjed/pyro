@@ -122,9 +122,10 @@ class SMCFilter(object):
                 self._log_weights += log_p
 
         self._log_weights -= self._log_weights.max()
+        print("Log weights: ", self._log_weights)
 
     def _maybe_importance_resample(self):
-        if True:  # TODO check perplexity
+        if False:  # TODO check perplexity
             self._importance_resample()
 
     def _importance_resample(self):

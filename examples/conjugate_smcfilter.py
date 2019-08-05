@@ -61,11 +61,14 @@ a conjugate model.
 
 class ConjugateStateSpaceModel:
 
-    def __init__(self, prior_xz, prior_zz, prior_zy, has_inputs=True):
+    def __init__(self, prior_xz, prior_zz, prior_zy, latent_dim, obs_dim, has_inputs=True):
         self.has_inputs = has_inputs
         self.prior_xz = prior_xz
         self.prior_zz = prior_zz
         self.prior_zy = prior_zy
+
+        self.latent_dim = latent_dim
+        self.obs_dim = obs_dim
 
     def init(self, initial):
         # initial must have particles as the first dimension otherwise it will break.
@@ -75,11 +78,20 @@ class ConjugateStateSpaceModel:
 
         if self.has_inputs:
             self.summary_xz = dist.NIGNormalRegressionSummary(*self.prior_xz)
+        assert(self.prior_zz[0].shape[-2:] == (self.latent_dim, self.latent_dim))
+        assert(self.prior_zz[1].shape[-3:] == (self.latent_dim, self.latent_dim, self.latent_dim))
+        assert(self.prior_zz[2].shape[-1] == (self.latent_dim))
+        assert(self.prior_zz[3].shape[-1] == (self.latent_dim))
         self.summary_zz = dist.NIGNormalRegressionSummary(*self.prior_zz)
+        assert(self.prior_zy[0].shape[-2:] == (self.obs_dim, self.latent_dim))
+        assert(self.prior_zy[1].shape[-3:] == (self.obs_dim, self.latent_dim, self.latent_dim))
+        assert(self.prior_zy[2].shape[-1] == (self.obs_dim))
+        assert(self.prior_zy[3].shape[-1] == (self.obs_dim))
         self.summary_zy = dist.NIGNormalRegressionSummary(*self.prior_zy)
 
     def step(self, x=None, y=None):
         print("STEPPING")
+        print("TIMESTEP: ", self.t)
         # TODO: Figure out if non-batching over summary update works
         old_z = self.z
         if self.has_inputs and x is not None:
@@ -100,7 +112,6 @@ class ConjugateStateSpaceModel:
                              obs=y)
         self.summary_zy.update(self.y[..., None, :], self.z[..., None, :])
 
-        print("TIMESTEP: ", self.t)
         self.t += 1
 
     def forecast(self, x=None):
@@ -129,12 +140,12 @@ class ConjugateStateSpaceModel:
         loc = _features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
         term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(summary.precision.inverse())
                  .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
-        # term1_correct = summary.rate/summary.shape
+        term1_correct = summary.rate/summary.shape
         # term2_correct = 1. + _features.matmul(summary.covariance).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
         term2 = 1. + _features.matmul(summary.precision.inverse()).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
         scalesquared = term1 * term2 
         # scalesquared_correct = term1_correct * term2_correct
-        # assert(torch.all(term1_correct > 0.))
+        assert(torch.all(term1_correct > 0.))
         assert(torch.all(term1 > 0.))
         assert(torch.all(term2 > 0.))
         assert(torch.all(scalesquared > 0.))
@@ -158,11 +169,13 @@ class ConjugateStateSpaceModel_Guide:
 def generate_data(args):
     ys = []
     for t in range(args.num_timesteps):
-        ys.append(torch.sin(torch.tensor([5.*t + 3.])) + 0.5 + torch.distributions.Normal(0., 1.).sample())
+        ys.append(torch.sin(torch.tensor([5.*t + 3.])) + 0.5 + torch.distributions.Normal(100., 3.).sample())
 
     return ys
 
 def get_forecast(values, logweights):
+    print("Values: ", values)
+    print("Logweights: ", logweights)
     return {name: dist.Empirical(value, logweights)
                     for name, value in values.items()
                     if name.startswith('y')}
@@ -178,9 +191,9 @@ def main(args):
                 torch.tensor(1.).expand(args.latent_dim))
     prior_zy = (torch.zeros((1, args.latent_dim)), 
                 torch.eye(args.latent_dim).expand((1, args.latent_dim, args.latent_dim)) + 0.5, 
-                torch.tensor(3.), 
-                torch.tensor(1.))
-    model = ConjugateStateSpaceModel(None, prior_zz, prior_zy, has_inputs=args.has_inputs)
+                torch.tensor([3.]), 
+                torch.tensor([1.]))
+    model = ConjugateStateSpaceModel(None, prior_zz, prior_zy, args.latent_dim, 1, has_inputs=args.has_inputs)
     guide = ConjugateStateSpaceModel_Guide(model, has_inputs=args.has_inputs)
 
     smc = SMCFilter(model, guide, num_particles=args.num_particles, max_plate_nesting=1)
@@ -205,7 +218,7 @@ def main(args):
     #     logging.info("{}\t{}\t{}\t{}".format(t, zs[t], z.mean, z.variance))
 
     logging.info("=============================")
-    logging.info('Forecasts')
+    logging.info('Forecasts\tTruth\tPred_Mean\tPred_Variance')
     for t in range(args.num_timesteps):
         y_emp = forecasts["y_{}".format(t)]
         logging.info("{}\t{}\t{}\t{}".format(t, ys[t], y_emp.mean, y_emp.variance))
