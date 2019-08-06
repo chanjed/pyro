@@ -114,6 +114,13 @@ class ConjugateStateSpaceModel:
 
         self.t += 1
 
+    def resample(self, index):
+        if self.has_inputs:
+            self.summary_xz = self.summary_xz[index]
+        self.summary_zz = self.summary_zz[index]
+        self.summary_zy = self.summary_zy[index]
+        self.z = self.z[index]
+
     def forecast(self, x=None):
         print("FORECASTING")
         if self.has_inputs and x is not None:

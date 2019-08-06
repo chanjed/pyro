@@ -72,6 +72,10 @@ class SMCFilter(object):
         self._values.update(_extract_samples(model_trace))
         self._maybe_importance_resample()
 
+    def resample(self, index):
+        self._values = {name: value[index].contiguous() for name, value in self._values.items()}
+        self._log_weights.fill_(0.)
+
     def forecast(self, *args, **kwargs):
         """
         Take a forecasting step using 
@@ -131,5 +135,8 @@ class SMCFilter(object):
     def _importance_resample(self):
         # TODO: Turn quadratic algo -> linear algo by being lazier
         index = dist.Categorical(logits=self._log_weights).sample(sample_shape=(self.num_particles,))
-        self._values = {name: value[index].contiguous() for name, value in self._values.items()}
-        self._log_weights.fill_(0.)
+        self.resample(index)
+        if hasattr(self.model, "resample"):
+            self.model.resample(index)
+        if hasattr(self.guide, "resample"):
+            self.guide.resample(index)
