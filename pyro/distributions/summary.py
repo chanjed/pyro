@@ -107,6 +107,7 @@ class NIGNormalRegressionSummary(Summary):
         self.updated_canonical = True
         self.obs_dim = None
 
+    @torch.no_grad()
     def update(self, obs, features=None):
         # features batch_shape == (other_batches); event_shape == (update_batch, features_dim)
         # obs:     batch_shape == (other_batches); event_shape == (update_batch, obs_dim)
@@ -130,6 +131,7 @@ class NIGNormalRegressionSummary(Summary):
 
         self.updated_canonical = False
 
+    @torch.no_grad()
     def downdate(self, obs, features=None):
         # features batch_shape == (other_batches); event_shape == (update_batch, features_dim)
         # obs:     batch_shape == (other_batches); event_shape == (update_batch, obs_dim)
@@ -207,3 +209,12 @@ class NIGNormalRegressionSummary(Summary):
         self.updated_canonical = True
 
         return self._mean, self._covariance, self._shape, self._rate
+
+    def __getitem__(self, index):
+        # Maybe add .contiguous()?
+        mean = self.mean[index]
+        covariance = self.covariance[index]
+        shape = self.shape[index]
+        rate = self.rate[index]
+        return NIGNormalRegressionSummary(self, mean, covariance, shape, rate)
+
