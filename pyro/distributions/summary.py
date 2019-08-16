@@ -4,6 +4,7 @@ import torch
 from six import add_metaclass
 from torch.testing import assert_allclose
 from pyro.distributions.util import broadcast_shape, validation_enabled
+import warnings
 
 
 @add_metaclass(ABCMeta)
@@ -91,12 +92,13 @@ class NIGNormalRegressionSummary(Summary):
     # TODO: Allow for fast Cholesky rank-1 update
     def __init__(self, prior_mean, prior_covariance, prior_shape, prior_rate):
         # Hack to allow scalar inputs
-        self._mean = torch.as_tensor(prior_mean)
-        self._covariance = torch.as_tensor(prior_covariance)
-        self._shape = torch.as_tensor(prior_shape)
-        self._rate = torch.as_tensor(prior_rate)
+        self._mean = torch.as_tensor(prior_mean) + torch.tensor([0.])
+        self._covariance = torch.as_tensor(prior_covariance) + torch.tensor([[0.]])
+        self._shape = torch.as_tensor(prior_shape) + torch.tensor([0.])
+        self._rate = torch.as_tensor(prior_rate) + torch.tensor([0.])
         if validation_enabled():
-            assert torch.all(self._covariance.eq(self._covariance.transpose(-2, -1)))
+            if (torch.abs(self._covariance - self._covariance.transpose(-2,-1)).max() > 1.e-6):
+                warnings.warn("Need to implement with Cholesky with symmetries being unstable.")
             assert torch.all(self._shape > 0)
             assert torch.all(self._rate > 0)
 
@@ -130,34 +132,39 @@ class NIGNormalRegressionSummary(Summary):
 
         self._precision_times_mean = self._precision_times_mean + obs.transpose(-2, -1).matmul(features)
         self._precision = self._precision + (features.transpose(-2, -1).matmul(features)).unsqueeze(-3)
-        self._shape = self._shape + 0.5 * obs.shape[-2]
+        self._shape = self._shape + 0.5 * torch.ones(obs.transpose(-2,-1).shape).sum(-1)
         self._reparametrized_rate = self._reparametrized_rate + 0.5 * (obs * obs).sum(-2)
-
+        
         self._updated_canonical = False
 
     @torch.no_grad()
-    def downdate(self, obs, features=None):
+    def downdate(self, obs, features=None, num_forget=None):
         # features batch_shape == (other_batches); event_shape == (update_batch, features_dim)
         # obs:     batch_shape == (other_batches); event_shape == (update_batch, obs_dim)
         assert features is not None
         assert obs.dim() >= 2
         assert features.dim() >= 2
-        assert obs.shape[-2] == features.shape[-2]
+        assert obs.size(-2) == features.size(-2)
         if self.obs_dim is None:
             self.obs_dim = obs.shape[-1]
         else:
-            assert self.obs_dim == obs.shape[-1]
+            assert self.obs_dim == obs.size(-1)
 
-        # Hack to enforce that features and obs are all the same batch dimension such that the parameters
-        # are all the same dimension
-        features = features + torch.zeros(list(obs.shape[:-1]) + [features.shape[-1]])
-        obs = obs + torch.zeros(list(features.shape[:-1]) + [obs.shape[-1]])
+        batch_shape = broadcast_shape(features.shape[:-1], obs.shape[:-1])
+        if features.shape[:-1] != batch_shape:
+            features = features.expand(batch_shape + (-1,))
+        if obs.shape[:-1] != batch_shape:
+            obs = obs.expand(batch_shape + (-1,))
 
         self._precision_times_mean = self._precision_times_mean - obs.transpose(-2, -1).matmul(features)
         self._precision = self._precision - (features.transpose(-2, -1).matmul(features)).unsqueeze(-3)
-        self._shape = self._shape - 0.5 * obs.shape[-2]
+        # num_forget is needed if obs and features do not implicitly encode the number of points to downdate
+        if num_forget is None:
+            self._shape = self._shape - 0.5 * torch.ones(obs.transpose(-2,-1).shape).sum(-1)
+        else:
+            self._shape = self._shape - 0.5 * num_forget.unsqueeze(-1).type(self._shape.type())
         self._reparametrized_rate = self._reparametrized_rate - 0.5 * (obs * obs).sum(-2)
-
+        
         self._updated_canonical = False
 
     @property
@@ -202,11 +209,23 @@ class NIGNormalRegressionSummary(Summary):
         :rtype: a tuple of mean (features.dim), covariance (features.dim, features.dim),
                 shape (), and rate ().
         """
+        # Numerical hack for now
+        old_rate = self._rate.clone()
         self._covariance = self._precision.inverse()
         self._mean = self._covariance.matmul(self._precision_times_mean.unsqueeze(-1)).squeeze(-1)
         self._rate = self._reparametrized_rate - (0.5*(self._mean.unsqueeze(-2)).matmul(self._precision)
                                                   .matmul(self._mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
-
+        # TODO: FIX THIS HACK
+        # old_rate = old_rate + torch.zeros(self._rate.shape)
+        # if torch.any(self._rate < old_rate):
+        #     print("A HACK OCCURRED")
+        #     self._rate[self._rate < old_rate] = old_rate[self._rate < old_rate]
+        # if torch.any(self._rate < old_rate):
+        #     raise RuntimeError("fucked up here.")
+        if not torch.all(self._rate > 0.):
+            import pdb
+            pdb.set_trace()
+        assert(torch.all(self._rate > 0.))
         self._updated_canonical = True
 
         return self._mean, self._covariance, self._shape, self._rate
@@ -217,4 +236,4 @@ class NIGNormalRegressionSummary(Summary):
         covariance = self.covariance[index]
         shape = self.shape[index]
         rate = self.rate[index]
-        return NIGNormalRegressionSummary(self, mean, covariance, shape, rate)
+        return NIGNormalRegressionSummary(mean, covariance, shape, rate)
