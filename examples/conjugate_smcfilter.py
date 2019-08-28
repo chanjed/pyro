@@ -23,6 +23,7 @@ a conjugate model.
 
 """
 
+
 class ConjugateStateSpaceModel:
 
     def __init__(self, prior_xz, prior_zz, prior_zy, latent_dim, obs_dim, has_inputs=True):
@@ -54,9 +55,10 @@ class ConjugateStateSpaceModel:
         self.summary_zy = dist.NIGNormalRegressionSummary(*self.prior_zy)
 
     def step(self, x=None, y=None):
-        print("STEPPING")
+        print("=================================")
         print("TIMESTEP: ", self.t)
-        # TODO: Figure out if non-batching over summary update works
+        print("STEPPING...")
+
         old_z = self.z
         if self.has_inputs and x is not None:
             z_x = pyro.sample("zx_{}".format(self.t),
@@ -67,57 +69,30 @@ class ConjugateStateSpaceModel:
 
         z_z = pyro.sample("zz_{}".format(self.t),
                           self._get_posterior_predictive(self.summary_zz, old_z))
-        # z_z = pyro.sample("zz_{}".format(self.t),
-        #                   dist.Delta(torch.arange(1.*self.latent_dim)))
         self.z = z_x + z_z # (particles x z_dim)
-        old_rate = self.summary_zz.rate
-        self.summary_zz.update(self.z[..., None, :], old_z[..., None, :])
 
-        print("Min Weights: ", torch.abs(self.summary_zz.mean).min())
-        print("Max Weights: ", torch.abs(self.summary_zz.mean).max())
-        print("Min Cov Val: ", torch.abs(self.summary_zz.covariance).min())
-        print("Max Cov Val: ", torch.abs(self.summary_zz.covariance).max())
-        print("Min Prec Val: ", torch.abs(self.summary_zz.precision).min())
-        print("Max Prec Val: ", torch.abs(self.summary_zz.precision).max())
-        print("Min Cov Diag: ", torch.abs(self.summary_zz.covariance.diag_embed()).min())
-        print("Max Cov Diag: ", torch.abs(self.summary_zz.covariance.diag_embed()).max())
-        print("Min Prec Diag: ", torch.abs(self.summary_zz.precision.diag_embed()).min())
-        print("Max Prec Diag: ", torch.abs(self.summary_zz.precision.diag_embed()).max())
-        # print("Min Cov Eig: ", min([self.summary_zz.covariance[i,0,:,:].symeig().eigenvalues.min() for i in range(1000)]))
-        # print("Max Cov Eig: ", max([self.summary_zz.covariance[i,0,:,:].symeig().eigenvalues.max() for i in range(1000)]))
-        # print("Min Prec Eig: ", min([self.summary_zz.precision[i,0,:,:].symeig().eigenvalues.min() for i in range(1000)]))
-        # print("Max Prec Eig: ", max([self.summary_zz.precision[i,0,:,:].symeig().eigenvalues.max() for i in range(1000)]))
-        print("Min diff rate: ", (self.summary_zz.rate - old_rate).min())
-        assert(torch.all(self.summary_zz.rate + 1.e-6 >= old_rate))
-        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+        old_rate = self.summary_zz.rate.clone()
+        self.summary_zz.update(self.z[..., None, :], old_z[..., None, :])
+        # _output_for_numerical_debugging(self.summary_zz, old_rate)
+
+        # Hack if rate is decreasing due to instabiilty of large covariance condition number
+        # TODO: Remove this and get those particles resampled out
+        if not torch.all(self.summary_zz.rate + 1.e-6 >= old_rate):
+            print("ZZ RATE HACK")
+            self.summary_zz._rate[self.summary_zz._rate < old_rate] = old_rate[self.summary_zz._rate < old_rate]
 
         self.y = pyro.sample("y_{}".format(self.t), 
                              self._get_posterior_predictive(self.summary_zy, self.z),
                              obs=y)
         old_rate = self.summary_zy.rate
         self.summary_zy.update(self.y[..., None, :], self.z[..., None, :])
+        # _output_for_numerical_debugging(self.summary_zy, old_rate)
 
-        print("Min Weights: ", torch.abs(self.summary_zy.mean).min())
-        print("Max Weights: ", torch.abs(self.summary_zy.mean).max())
-        print("Min Cov Val: ", torch.abs(self.summary_zy.covariance).min())
-        print("Max Cov Val: ", torch.abs(self.summary_zy.covariance).max())
-        print("Min Prec Val: ", torch.abs(self.summary_zy.precision).min())
-        print("Max Prec Val: ", torch.abs(self.summary_zy.precision).max())
-        print("Min Cov Diag: ", torch.abs(self.summary_zy.covariance.diag_embed()).min())
-        print("Max Cov Diag: ", torch.abs(self.summary_zy.covariance.diag_embed()).max())
-        print("Min Prec Diag: ", torch.abs(self.summary_zy.precision.diag_embed()).min())
-        print("Max Prec Diag: ", torch.abs(self.summary_zy.precision.diag_embed()).max())
-        print("Min Cov Eig: ", min([self.summary_zy.covariance[i,0,:,:].symeig().eigenvalues.min() for i in range(10)]))
-        print("Max Cov Eig: ", max([self.summary_zy.covariance[i,0,:,:].symeig().eigenvalues.max() for i in range(10)]))
-        print("Min Prec Eig: ", min([self.summary_zy.precision[i,0,:,:].symeig().eigenvalues.min() for i in range(10)]))
-        print("Max Prec Eig: ", max([self.summary_zy.precision[i,0,:,:].symeig().eigenvalues.max() for i in range(10)]))
-        print("Min diff rate: ", (self.summary_zy.rate - old_rate).min())
-        print("Min reparam rate: ", self.summary_zy.reparametrized_rate.min())
-        print("Max reparam rate: ", self.summary_zy.reparametrized_rate.max())
-        print("Min rate: ", self.summary_zy.rate.min())
-        print("Max rate: ", self.summary_zy.rate.max())
-        assert(torch.all(self.summary_zy.rate + 1.e-6 >= old_rate))
-        print("=================================")
+        # Hack if rate is decreasing due to instabiilty of large covariance condition number
+        if not torch.all(self.summary_zy.rate + 1.e-6 >= old_rate):
+            print("ZY RATE HACK")
+            self.summary_zy._rate[self.summary_zy._rate < old_rate] = old_rate[self.summary_zy._rate < old_rate]
+
         self.t += 1
 
     def resample(self, index):
@@ -125,7 +100,6 @@ class ConjugateStateSpaceModel:
             self.summary_xz = self.summary_xz[index]
         print("RESAMPLING...")
         self.summary_zz = self.summary_zz[index]
-        print("zy")
         self.summary_zy = self.summary_zy[index]
         self.z = self.z[index]
 
@@ -147,46 +121,55 @@ class ConjugateStateSpaceModel:
             raise Exception("Not yet implemented..history needs to keep track of x's too.")
         zs = history.get_downdate_values("zz")
         if zs is not None:
-            print("VALUES:", history._values["zz"][:,0,...])
-            print("Summary mean:", self.summary_zz.mean)
-            # print("OBS:", history._obs["y"].shape)
-            # print("LOG PROBS:", history._log_probs["y"].shape)
-            # print("INITTIAL:", history._initial["zz"].shape)
-            # print("obs_to_dd", zs)
-            # print("features_to_dd", history.get_downdate_values("zz", -1))
-            # print("num_forget", history.get_num_forget())
-            print("zs shape", zs)
-            print("features_shape", history.get_downdate_values("zz", -1))
-            # print("forget shape", history.get_num_forget().shape)
-            old_rate = self.summary_zz.reparametrized_rate
+            old_rate = self.summary_zz.rate
             self.summary_zz.downdate(zs, history.get_downdate_values("zz", -1), history.get_num_forget())
-            # print("Min forget: ", history.get_num_forget().min())
-            # print("Max forget: ", history.get_num_forget().max())
-            # print("Min forget: ", history.get_num_forget().argmin())
-            # print("Max forget: ", history.get_num_forget().argmax())
-            # print("Mean: ", self.summary_zz.mean)
-            # print("Cov: ", self.summary_zz.covariance)
-            # print("Shape: ", self.summary_zz.shape)
-            print("Downdated reparam'd rate: ", old_rate - self.summary_zz.reparametrized_rate)
+
+            # Hack if rate is increasing due to instabiilty of large covariance condition number
+            if not torch.all(old_rate + 1.e-6 >= self.summary_zz.rate):
+                print("ZZ DOWNDATE RATE HACK")
+                self.summary_zz._rate[self.summary_zz._rate >= old_rate] = old_rate[self.summary_zz._rate >= old_rate]
+
             old_rate = self.summary_zy.rate
             self.summary_zy.downdate(history.get_downdate_obs("y"), zs, history.get_num_forget())
-            print("Downdated rate: ", old_rate - self.summary_zy.rate)
+
+            # Hack if rate is increasing due to instabiilty of large covariance condition number
+            if not torch.all(old_rate + 1.e-6 >= self.summary_zy.rate):
+                print("ZY DOWNDATE RATE HACK")
+                self.summary_zy._rate[self.summary_zy._rate >= old_rate] = old_rate[self.summary_zy._rate >= old_rate]
 
     @staticmethod
     def _get_posterior_predictive(summary, features):
         _features = features[..., None, None, :]
         df = 2. * summary.shape
-        loc = _features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
-        term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(summary.precision.inverse())
+        cov = summary.scale_tril.matmul(summary.scale_tril.transpose(-2, -1))
+        loc = _features.matmul(cov).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(cov)
                  .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
-        term2 = 1. + _features.matmul(summary.precision.inverse()).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
+        term2 = 1. + _features.matmul(cov).matmul(_features.transpose(-2, -1)).squeeze(-1).squeeze(-1)
         scalesquared = term1 * term2
         assert(torch.all(term1 > 0.))
         assert(torch.all(term2 > 0.))
         assert(torch.all(scalesquared > 0.))
-        
-        return dist.StudentT(df, loc, torch.sqrt(scalesquared)) # (summary.obs_dim)
 
+        return dist.StudentT(df, loc, torch.sqrt(scalesquared))  # (summary.obs_dim)
+
+
+def _output_for_numerical_debugging(summary, old_rate=None):
+    print("Min Weights: ", torch.abs(summary.mean).min())
+    print("Max Weights: ", torch.abs(summary.mean).max())
+    print("Min Cov Val: ", torch.abs(summary.covariance).min())
+    print("Max Cov Val: ", torch.abs(summary.covariance).max())
+    print("Min Prec Val: ", torch.abs(summary.precision).min())
+    print("Max Prec Val: ", torch.abs(summary.precision).max())
+    print("Min Cov Diag: ", torch.abs(summary.covariance.diag_embed()).min())
+    print("Max Cov Diag: ", torch.abs(summary.covariance.diag_embed()).max())
+    print("Min Prec Diag: ", torch.abs(summary.precision.diag_embed()).min())
+    print("Max Prec Diag: ", torch.abs(summary.precision.diag_embed()).max())
+    print("Min Cov Eig: ", min([summary.covariance[i,0,:,:].symeig().eigenvalues.min() for i in range(1000)]))
+    print("Max Cov Eig: ", max([summary.covariance[i,0,:,:].symeig().eigenvalues.max() for i in range(1000)]))
+    print("Min Prec Eig: ", min([summary.precision[i,0,:,:].symeig().eigenvalues.min() for i in range(1000)]))
+    print("Max Prec Eig: ", max([summary.precision[i,0,:,:].symeig().eigenvalues.max() for i in range(1000)]))
+    print("Min diff rate: ", (summary.rate - old_rate).min())
 
 
 class ConjugateStateSpaceModel_Guide:
@@ -201,7 +184,7 @@ class ConjugateStateSpaceModel_Guide:
         pass
 
 
-def generate_data(args):
+def generate_synthetic_data(args):
     denoised_ys = []
     ys = []
     for t in range(args.num_timesteps):
@@ -211,14 +194,15 @@ def generate_data(args):
         else:
             clean_y = 20.*torch.sin(torch.tensor([0.2*t + 8.])) + 0.1*(t-500.) + 0.05*500.
         denoised_ys.append(clean_y)
-        ys.append(clean_y + torch.distributions.Normal(0., 2.0).sample())
+        ys.append(clean_y + torch.distributions.Normal(0., 8.0).sample())
 
     return ys, denoised_ys
+
 
 def get_nile_data(args):
     """STEP 1: Read in the nile data from nile.txt"""
     raw_data = []
-    with open("/Users/jeffrey.chan/Documents/bocpdms/Data/nile.txt") as csvfile:
+    with open("/Users/jeffreychan/Documents/pyro/data/nile.txt") as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
             raw_data += row
@@ -266,7 +250,7 @@ def plot(true_xs, true_ys, predictions, nile=False):
     ax.fill_between(true_xs.flatten(), predictions[:, 1].flatten(), predictions[:, 2].flatten(), color='lightblue')
     # plot mean prediction
     ax.plot(true_xs, predictions[:, 0], 'blue', ls='solid', lw=2.0, label='Mean Prediction')
-    # TODO: allow trajectoriees to be ploted
+    # TODO: allow trajectories to be plotted
 
     ax.set(xlabel="Time", ylabel="Y", title="Mean predictions with 90% CI")
 
@@ -277,8 +261,9 @@ def plot(true_xs, true_ys, predictions, nile=False):
 
 def get_forecast(values, logweights):
     return {name: dist.Empirical(value, logweights)
-                    for name, value in values.items()
-                    if name.startswith('y')}
+            for name, value in values.items()
+            if name.startswith('y')}
+
 
 def extract_mean_nll(log_probs):
     assert(len(log_probs) == 1)
@@ -296,70 +281,69 @@ def main(args):
 
     # Define the prior, the model object, and inference object
     prior_zz = (torch.zeros((args.latent_dim, args.latent_dim)), 
-                (torch.eye(args.latent_dim).expand((args.latent_dim, args.latent_dim, args.latent_dim)) + 0.5),
-                #5.*
+                torch.cholesky(torch.eye(args.latent_dim).expand((args.latent_dim, args.latent_dim, args.latent_dim)) + 0.5),
+                #10*#5.*
                 torch.tensor(3.).expand(args.latent_dim), 
-                0.01*
+                0.01 *
                 torch.tensor(1.).expand(args.latent_dim))
     prior_zy = (torch.zeros((1, args.latent_dim)), 
-                (torch.eye(args.latent_dim).expand((1, args.latent_dim, args.latent_dim)) + 0.5), 
-                50.*
+                torch.cholesky(torch.eye(args.latent_dim).expand((1, args.latent_dim, args.latent_dim)) + 0.5), 
+                50. *
                 torch.tensor([3.]), 
-                1.*
+                1. *
                 torch.tensor([1.]))
     model = ConjugateStateSpaceModel(None, prior_zz, prior_zy, args.latent_dim, 1, has_inputs=args.has_inputs)
     guide = ConjugateStateSpaceModel_Guide(model, has_inputs=args.has_inputs)
 
-    smc = FastOnlineSMCFilter(model, guide, num_particles=args.num_particles, max_plate_nesting=1, 
-                              max_timesteps=args.num_timesteps, forget_prob=0.5)
+    smc = FastOnlineSMCFilter(model, guide, num_particles=args.num_particles, max_plate_nesting=1,
+                              resampling_prob=args.resampling_prob, 
+                              max_timesteps=args.num_timesteps, forget_prob=0.5,
+                              steps_until_downdate=args.steps_until_downdate)
 
     # Generate data
     logging.info('Generating data')
     if not args.nile:
-        ys, clean_ys = generate_data(args)
+        ys, clean_ys = generate_synthetic_data(args)
     else:
         ys = get_nile_data(args)
 
     # Perform inference and forecasting
     logging.info('Performing inference')
     forecasts = {}
-    smc.init(initial=torch.zeros(args.latent_dim).expand((args.num_particles, args.latent_dim)))
+    smc.init(initial=torch.zeros((args.num_particles, args.latent_dim)))
     for y in ys:
         forecasts.update(get_forecast(*smc.forecast()))
         smc.step(y=y)
 
-    # Log predictions and plot
+    # Log forecasts and plot
     logging.info("=============================")
     logging.info('Forecasts\tTruth\tPred_Mean\tPred_Variance\t0.05 CI\t0.95 CI')
     emps = []
-    # nll = 0.
     mse = np.zeros(len(ys))
     for t in range(len(ys)):
         y_emp = forecasts["y_{}".format(t)]
-
         mse[t] = (y_emp.mean - ys[t])**2
-        # nll -= y_emp.log_prob(ys[t])
-        samples = np.array(y_emp.enumerate_support()).flatten()
-        samples = np.sort(samples)
+        samples = np.sort(np.array(y_emp.enumerate_support()).flatten())
         conf_left = samples[int(np.round(args.num_particles*0.05)) - 1]
         conf_right = samples[int(np.round(args.num_particles*0.95)) - 1]
         emps.append(np.array([y_emp.mean, conf_left, conf_right]))
 
         if not args.nile:
-            logging.info("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(t, ys[t], clean_ys[t], y_emp.mean, y_emp.variance, conf_left, conf_right))
+            logging.info("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(t, ys[t], clean_ys[t], y_emp.mean, y_emp.variance,
+                         conf_left, conf_right))
         else:
-            logging.info("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(t, ys[t], y_emp.mean, y_emp.variance, conf_left, conf_right, mse[t]))
+            logging.info("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(t, ys[t], y_emp.mean, y_emp.variance, conf_left,
+                         conf_right, mse[t]))
 
+    # Log forecasting metrics
     log_probs, log_weights = smc.get_log_probs()
     assert(torch.all(log_weights == 0.)) # If not then our nll computation is wrong
-    # print(log_probs)
     mean_nll = extract_mean_nll(log_probs)
-
     logging.info("MSE:\t{}".format(np.mean(mse)))
-    logging.info("Last 400 MSE:\t{}".format(np.mean(mse[-400:])))
     logging.info("NLL:\t{}".format(mean_nll))
-    plot(np.arange(len(ys)), np.array(ys), np.array(emps), nile=args.nile)
 
+    # Plot results
+    plot(np.arange(len(ys)), np.array(ys), np.array(emps), nile=args.nile)
 
 
 if __name__ == "__main__":
@@ -367,6 +351,8 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num-timesteps", default=50, type=int)
     parser.add_argument("-p", "--num-particles", default=100, type=int)
     parser.add_argument("-d", "--latent-dim", default=5, type=int)
+    parser.add_argument("--steps-until-downdate", default=20, type=int)
+    parser.add_argument("--resampling-prob", default=1.0, type=float)
     parser.add_argument("--has-inputs", default=False, type=bool)
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--nile", action="store_true", default=False)

@@ -90,24 +90,24 @@ class NIGNormalRegressionSummary(Summary):
                              batch_shape == (other_batches, obs_dim or 1); event_shape is ()
     """
     # TODO: Allow for fast Cholesky rank-1 update
-    def __init__(self, prior_mean, prior_covariance, prior_shape, prior_rate):
+    def __init__(self, prior_mean, prior_scale_tril, prior_shape, prior_rate):
         # Hack to allow scalar inputs
         self._mean = torch.as_tensor(prior_mean) + torch.tensor([0.])
-        self._covariance = torch.as_tensor(prior_covariance) + torch.tensor([[0.]])
+        self._scale_tril = torch.as_tensor(prior_scale_tril) + torch.tensor([[0.]])
         self._shape = torch.as_tensor(prior_shape) + torch.tensor([0.])
         self._rate = torch.as_tensor(prior_rate) + torch.tensor([0.])
         if validation_enabled():
-            if (torch.abs(self._covariance - self._covariance.transpose(-2,-1)).max() > 1.e-6):
-                warnings.warn("Need to implement with Cholesky with symmetries being unstable.")
+            assert (self._scale_tril.tril() == self._scale_tril).view(self._scale_tril.shape[:-2] + (-1,)).min(-1)
+            assert torch.all((self._scale_tril.diagonal(dim1=-2, dim2=-1) > 0).min(-1)[0])
             assert torch.all(self._shape > 0)
             assert torch.all(self._rate > 0)
 
         # Reparametrize
-        self._precision = self._covariance.inverse()
-        self._precision_times_mean = self._precision.matmul(self._mean.unsqueeze(-1)).squeeze(-1)
-        self._reparametrized_rate = self._rate + (0.5*(self._mean.unsqueeze(-2)).matmul(self._precision)
-                                                  .matmul(self._mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
-
+        flipped_scale_tril = torch.cholesky(torch.flip(self._scale_tril.matmul(self._scale_tril.transpose(-2,-1)), (-1, -2)))
+        self._invscale_tril = torch.inverse(torch.flip(flipped_scale_tril, (-1, -2)).transpose(-2,-1)).tril() #TODO: ideally .cholesky_inverse() is used here
+        self._precision_times_mean = torch.cholesky_solve(self._mean.unsqueeze(-1), self._scale_tril).squeeze(-1)
+        self._reparametrized_rate = self._rate + 0.5 * (self._mean * self._precision_times_mean).sum(-1)
+       
         self._updated_canonical = True
         self.obs_dim = None
 
@@ -131,7 +131,10 @@ class NIGNormalRegressionSummary(Summary):
             obs = obs.expand(batch_shape + (-1,))
 
         self._precision_times_mean = self._precision_times_mean + obs.transpose(-2, -1).matmul(features)
-        self._precision = self._precision + (features.transpose(-2, -1).matmul(features)).unsqueeze(-3)
+        # TODO: include cholupdate from: <https://github.com/pytorch/pytorch/issues/22587>
+        # TODO: catch if cholesky decomposition is singular
+        self._invscale_tril = torch.cholesky(self._invscale_tril.matmul(self._invscale_tril.transpose(-2, -1))
+                                             + (features.transpose(-2, -1).matmul(features)).unsqueeze(-3))
         self._shape = self._shape + 0.5 * torch.ones(obs.transpose(-2,-1).shape).sum(-1)
         self._reparametrized_rate = self._reparametrized_rate + 0.5 * (obs * obs).sum(-2)
         
@@ -157,14 +160,15 @@ class NIGNormalRegressionSummary(Summary):
             obs = obs.expand(batch_shape + (-1,))
 
         self._precision_times_mean = self._precision_times_mean - obs.transpose(-2, -1).matmul(features)
-        self._precision = self._precision - (features.transpose(-2, -1).matmul(features)).unsqueeze(-3)
+        self._invscale_tril = torch.cholesky(self._invscale_tril.matmul(self._invscale_tril.transpose(-2, -1))
+                                             - (features.transpose(-2, -1).matmul(features)).unsqueeze(-3))
         # num_forget is needed if obs and features do not implicitly encode the number of points to downdate
         if num_forget is None:
             self._shape = self._shape - 0.5 * torch.ones(obs.transpose(-2,-1).shape).sum(-1)
         else:
             self._shape = self._shape - 0.5 * num_forget.unsqueeze(-1).type(self._shape.type())
         self._reparametrized_rate = self._reparametrized_rate - 0.5 * (obs * obs).sum(-2)
-        
+              
         self._updated_canonical = False
 
     @property
@@ -177,7 +181,13 @@ class NIGNormalRegressionSummary(Summary):
     def covariance(self):
         if not self._updated_canonical:
             self._convert_to_canonical_form()
-        return self._covariance
+        return self._scale_tril.matmul(self._scale_tril.transpose(-2,-1))
+
+    @property
+    def scale_tril(self):
+        if not self._updated_canonical:
+            self._convert_to_canonical_form()
+        return self._scale_tril
 
     @property
     def rate(self):
@@ -190,8 +200,14 @@ class NIGNormalRegressionSummary(Summary):
         return self._precision_times_mean
 
     @property
+    def invscale_tril(self):
+        return self._invscale_tril
+
+    @property
     def precision(self):
-        return self._precision
+        if not self._updated_canonical:
+            self._convert_to_canonical_form()
+        return self._invscale_tril.matmul(self._invscale_tril.transpose(-2,-1))
 
     @property
     def shape(self):
@@ -209,31 +225,25 @@ class NIGNormalRegressionSummary(Summary):
         :rtype: a tuple of mean (features.dim), covariance (features.dim, features.dim),
                 shape (), and rate ().
         """
-        # Numerical hack for now
-        old_rate = self._rate.clone()
-        self._covariance = self._precision.inverse()
-        self._mean = self._covariance.matmul(self._precision_times_mean.unsqueeze(-1)).squeeze(-1)
-        self._rate = self._reparametrized_rate - (0.5*(self._mean.unsqueeze(-2)).matmul(self._precision)
-                                                  .matmul(self._mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
-        # TODO: FIX THIS HACK
-        # old_rate = old_rate + torch.zeros(self._rate.shape)
-        # if torch.any(self._rate < old_rate):
-        #     print("A HACK OCCURRED")
-        #     self._rate[self._rate < old_rate] = old_rate[self._rate < old_rate]
-        # if torch.any(self._rate < old_rate):
-        #     raise RuntimeError("fucked up here.")
+        flipped_invscale_tril = torch.cholesky(torch.flip(self._invscale_tril.matmul(self._invscale_tril.transpose(-2,-1)), (-1, -2)))
+        self._scale_tril = torch.inverse(torch.flip(flipped_invscale_tril, (-1, -2)).transpose(-2,-1)).tril()  # TODO: ideally .cholesky_inverse() is used here
+        self._mean = torch.cholesky_solve(self._precision_times_mean.unsqueeze(-1), self._invscale_tril).squeeze(-1)
+        self._rate = self._reparametrized_rate - 0.5 * (self._mean * self._precision_times_mean).sum(-1)
+
+        self._covariance = self._scale_tril.matmul(self._scale_tril.transpose(-2, -1))
+        self._precision = self._invscale_tril.matmul(self._invscale_tril.transpose(-2, -1))
+
         if not torch.all(self._rate > 0.):
             import pdb
             pdb.set_trace()
         assert(torch.all(self._rate > 0.))
         self._updated_canonical = True
 
-        return self._mean, self._covariance, self._shape, self._rate
+        return self._mean, self._scale_tril, self._shape, self._rate
 
     def __getitem__(self, index):
-        # Maybe add .contiguous()?
         mean = self.mean[index]
-        covariance = self.covariance[index]
+        scale_tril = self.scale_tril[index]
         shape = self.shape[index]
         rate = self.rate[index]
-        return NIGNormalRegressionSummary(mean, covariance, shape, rate)
+        return NIGNormalRegressionSummary(mean, scale_tril, shape, rate)

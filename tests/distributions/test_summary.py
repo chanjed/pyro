@@ -7,6 +7,7 @@ import pyro
 import pyro.distributions as dist
 from pyro.distributions import Bernoulli, Beta, BetaBernoulliSummary, Gamma, Normal, NIGNormalRegressionSummary
 
+# TODO: Need to clean up summary tests
 
 def test_betabern_smoke():
     summary = BetaBernoulliSummary(2., 4.)
@@ -32,163 +33,316 @@ def test_betabern_asymptotics():
     assert_allclose(Beta(summary.alpha, summary.beta).variance, 0.0, rtol=0.0, atol=0.1)
 
 
-@pytest.mark.parametrize("features_dim", [1, 2])
-@pytest.mark.parametrize("obs_dim", [1, 3])
-@pytest.mark.parametrize("batch_dim", [1, 4])
-def test_nignorm_smoke(features_dim, obs_dim, batch_dim):
-    summary_null = NIGNormalRegressionSummary(5., 6., 3., 1.)
-    summary_mixed = NIGNormalRegressionSummary(torch.tensor([5.]), 6., torch.tensor(3.), 1.)
-    summary_nobatch = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((obs_dim, features_dim)),
-                                                 torch.eye(features_dim).expand((obs_dim, features_dim, features_dim)),
-                                                 torch.tensor(3.),
-                                                 torch.tensor(1.).expand(obs_dim))
-    summary_bcast = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((1, features_dim)),
-                                               torch.eye(features_dim).expand((1, features_dim, features_dim)),
-                                               torch.tensor(3.),
-                                               torch.tensor(1.).expand(obs_dim))
-    summary_batch = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((batch_dim, obs_dim, features_dim)),
-                                               torch.eye(features_dim)
-                                               .expand((batch_dim, obs_dim, features_dim, features_dim)),
-                                               torch.tensor(3.).expand(obs_dim),
-                                               torch.tensor(1.).expand(batch_dim, obs_dim))
-    summary_b_bcast = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((batch_dim, 1, features_dim)),
-                                                 torch.eye(features_dim)
-                                                 .expand((batch_dim, 1, features_dim, features_dim)),
-                                                 torch.tensor(3.).expand(1),
-                                                 torch.tensor(1.).expand(batch_dim, 1))
-    summary_list = [summary_null, summary_mixed, summary_nobatch, summary_bcast, summary_batch, summary_b_bcast]
+# @pytest.mark.parametrize("features_dim", [1, 2])
+# @pytest.mark.parametrize("obs_dim", [1, 3])
+# @pytest.mark.parametrize("batch_dim", [1, 4])
+# def test_nignorm_smoke(features_dim, obs_dim, batch_dim):
+#     summary_null = NIGNormalRegressionSummary(5., 6., 3., 1.)
+#     summary_mixed = NIGNormalRegressionSummary(torch.tensor([5.]), 6., torch.tensor(3.), 1.)
+#     summary_nobatch = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((obs_dim, features_dim)),
+#                                                  torch.eye(features_dim).expand((obs_dim, features_dim, features_dim)),
+#                                                  torch.tensor(3.),
+#                                                  torch.tensor(1.).expand(obs_dim))
+#     summary_bcast = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((1, features_dim)),
+#                                                torch.eye(features_dim).expand((1, features_dim, features_dim)),
+#                                                torch.tensor(3.),
+#                                                torch.tensor(1.).expand(obs_dim))
+#     summary_batch = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((batch_dim, obs_dim, features_dim)),
+#                                                torch.eye(features_dim)
+#                                                .expand((batch_dim, obs_dim, features_dim, features_dim)),
+#                                                torch.tensor(3.).expand(obs_dim),
+#                                                torch.tensor(1.).expand(batch_dim, obs_dim))
+#     summary_b_bcast = NIGNormalRegressionSummary(torch.zeros(features_dim).expand((batch_dim, 1, features_dim)),
+#                                                  torch.eye(features_dim)
+#                                                  .expand((batch_dim, 1, features_dim, features_dim)),
+#                                                  torch.tensor(3.).expand(1),
+#                                                  torch.tensor(1.).expand(batch_dim, 1))
+#     summary_list = [summary_null, summary_mixed, summary_nobatch, summary_bcast, summary_batch, summary_b_bcast]
 
-    features = torch.rand((1, features_dim))
-    obs = torch.rand((1, obs_dim))
-    features_batch = torch.rand((5, features_dim))
-    obs_batch = torch.rand((5, obs_dim))
+#     features = torch.rand((1, features_dim))
+#     obs = torch.rand((1, obs_dim))
+#     features_batch = torch.rand((5, features_dim))
+#     obs_batch = torch.rand((5, obs_dim))
 
-    for s in summary_list:
-        s.update(obs, features)
-        s.update(obs_batch, features_batch)
-        (s.mean, s.covariance, s.shape, s.rate)
+#     for s in summary_list:
+#         s.update(obs, features)
+#         s.update(obs_batch, features_batch)
+#         (s.mean, s.covariance, s.shape, s.rate)
 
-    # TODO: test swapping between obs_dim is not allowed
-
-
-def test_nignorm_prior():
-    true_mean = torch.tensor([2., 1.])
-    true_covariance = torch.tensor([[5., 2.], [2., 5.]])
-    true_shape = 3.
-    true_rate = 1.
-    summary = NIGNormalRegressionSummary(true_mean, true_covariance, true_shape, true_rate)
-
-    assert_allclose(summary.mean, true_mean)
-    assert_allclose(summary.covariance, true_covariance)
-    assert_allclose(summary.shape, true_shape)
-    assert_allclose(summary.rate, true_rate)
+#     # TODO: test swapping between obs_dim is not allowed
 
 
-def test_conversion():
-    true_mean = torch.tensor([2., 1., 0.]).expand((4, 2, 3))
-    true_covariance = torch.eye(3).expand((4, 2, 3, 3))
-    true_shape = 3.
-    true_rate = 1.
-    summary = NIGNormalRegressionSummary(true_mean, true_covariance, true_shape, true_rate)
-    assert_allclose(summary.precision_times_mean,
-                    summary.covariance.inverse().matmul(summary.mean.unsqueeze(-1)).squeeze(-1))
-    assert_allclose(summary.precision, summary.covariance.inverse())
-    assert_allclose(summary.reparametrized_rate, summary.rate + 0.5
-                    * summary.mean.unsqueeze(-2).matmul(summary.covariance.inverse())
-                    .matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
-    summary.update(torch.rand((100, 2)), torch.rand((100, 3)))
-    assert(summary.mean is not None)
-    assert_allclose(summary.precision_times_mean,
-                    summary.covariance.inverse().matmul(summary.mean.unsqueeze(-1)).squeeze(-1))
-    assert_allclose(summary.precision, summary.covariance.inverse())
-    assert_allclose(summary.reparametrized_rate, summary.rate + 0.5
-                    * summary.mean.unsqueeze(-2).matmul(summary.covariance.inverse())
-                    .matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
+# def test_nignorm_prior():
+#     true_mean = torch.tensor([2., 1.])
+#     true_covariance = torch.tensor([[5., 2.], [2., 5.]])
+#     true_shape = 3.
+#     true_rate = 1.
+#     summary = NIGNormalRegressionSummary(true_mean, true_covariance, true_shape, true_rate)
 
-    features = torch.rand((4, 3))
-    features = features[..., None, None, :]
-    loc = features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean
-                                                              .unsqueeze(-1)).squeeze(-1).squeeze(-1)
-    term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2)
-             .matmul(summary.precision.inverse())
-             .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
-    term2 = 1. + features.matmul(summary.precision.inverse()).matmul(features.transpose(-2, -1)).squeeze(-1).squeeze(-1)
-
-    canonical_loc = features.matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
-    canonical_term1 = summary.rate/summary.shape
-    canonical_term2 = 1. + features.matmul(summary.covariance).matmul(features
-                                                                      .transpose(-2, -1)).squeeze(-1).squeeze(-1)
-    assert_allclose(loc, canonical_loc)
-    assert_allclose(term1, canonical_term1)
-    assert_allclose(term2, canonical_term2)
+#     assert_allclose(summary.mean, true_mean)
+#     assert_allclose(summary.covariance, true_covariance)
+#     assert_allclose(summary.shape, true_shape)
+#     assert_allclose(summary.rate, true_rate)
 
 
-def test_nignorm_asymptotics():
-    # test the likelihood being correct
-    # include conversions between forms
-    weights = torch.tensor([2., 1.])
-    variance = 10.
-    noise = Normal(0., np.sqrt(variance))
-    features = torch.rand((10000, 2))
-    obs = features.matmul(weights).unsqueeze(-1) + noise.sample(sample_shape=torch.Size([10000, 1]))
+# def test_conversion():
+#     true_mean = torch.tensor([2., 1., 0.]).expand((4, 2, 3))
+#     true_covariance = torch.eye(3).expand((4, 2, 3, 3))
+#     true_shape = 3.
+#     true_rate = 1.
+#     summary = NIGNormalRegressionSummary(true_mean, true_covariance, true_shape, true_rate)
+#     assert_allclose(summary.precision_times_mean,
+#                     summary.covariance.inverse().matmul(summary.mean.unsqueeze(-1)).squeeze(-1))
+#     assert_allclose(summary.precision, summary.covariance.inverse())
+#     assert_allclose(summary.reparametrized_rate, summary.rate + 0.5
+#                     * summary.mean.unsqueeze(-2).matmul(summary.covariance.inverse())
+#                     .matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
+#     summary.update(torch.rand((100, 2)), torch.rand((100, 3)))
+#     assert(summary.mean is not None)
+#     assert_allclose(summary.precision_times_mean,
+#                     summary.covariance.inverse().matmul(summary.mean.unsqueeze(-1)).squeeze(-1))
+#     assert_allclose(summary.precision, summary.covariance.inverse())
+#     assert_allclose(summary.reparametrized_rate, summary.rate + 0.5
+#                     * summary.mean.unsqueeze(-2).matmul(summary.covariance.inverse())
+#                     .matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))
 
-    summary = NIGNormalRegressionSummary(torch.tensor([0.5, 0.5]),
-                                         torch.tensor([[3., 0.5], [0.5, 3.]]), 1.1, 10.)
-    summary.update(obs, features)
+#     features = torch.rand((4, 3))
+#     features = features[..., None, None, :]
+#     loc = features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean
+#                                                               .unsqueeze(-1)).squeeze(-1).squeeze(-1)
+#     term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2)
+#              .matmul(summary.precision.inverse())
+#              .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
+#     term2 = 1. + features.matmul(summary.precision.inverse()).matmul(features.transpose(-2, -1)).squeeze(-1).squeeze(-1)
 
-    assert_allclose(summary.mean, weights, rtol=0.0, atol=0.1)
-    assert_allclose(summary.covariance, torch.zeros((2, 2)), rtol=0.0, atol=0.1)
-    assert_allclose(1./Gamma(summary.shape, summary.rate).mean, variance, rtol=0.0, atol=0.1)
-    assert_allclose(Gamma(summary.shape, summary.rate).variance, 0., rtol=0.0, atol=0.1)
+#     canonical_loc = features.matmul(summary.mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+#     canonical_term1 = summary.rate/summary.shape
+#     canonical_term2 = 1. + features.matmul(summary.covariance).matmul(features
+#                                                                       .transpose(-2, -1)).squeeze(-1).squeeze(-1)
+#     assert_allclose(loc, canonical_loc)
+#     assert_allclose(term1, canonical_term1)
+#     assert_allclose(term2, canonical_term2)
 
-def _get_posterior_predictive(summary, features):
-        _features = features[..., None, None, :]
-        df = 2. * summary.shape
-        loc = _features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
-        term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(summary.precision.inverse())
-                 .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
-        term1_correct = summary.rate/summary.shape
-        # term2_correct = 1. + _features.matmul(summary.covariance).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
-        term2 = 1. + _features.matmul(summary.precision.inverse()).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
-        scalesquared = term1 * term2 
-        # scalesquared_correct = term1_correct * term2_correct
-        assert(torch.all(term1_correct > 0.))
-        assert(torch.all(term1 > 0.))
-        assert(torch.all(term2 > 0.))
-        assert(torch.all(scalesquared > 0.))
+
+# def test_nignorm_asymptotics():
+#     # test the likelihood being correct
+#     # include conversions between forms
+#     weights = torch.tensor([2., 1.])
+#     variance = 10.
+#     noise = Normal(0., np.sqrt(variance))
+#     features = torch.rand((10000, 2))
+#     obs = features.matmul(weights).unsqueeze(-1) + noise.sample(sample_shape=torch.Size([10000, 1]))
+
+#     summary = NIGNormalRegressionSummary(torch.tensor([0.5, 0.5]),
+#                                          torch.tensor([[3., 0.5], [0.5, 3.]]), 1.1, 10.)
+#     summary.update(obs, features)
+
+#     assert_allclose(summary.mean, weights, rtol=0.0, atol=0.1)
+#     assert_allclose(summary.covariance, torch.zeros((2, 2)), rtol=0.0, atol=0.1)
+#     assert_allclose(1./Gamma(summary.shape, summary.rate).mean, variance, rtol=0.0, atol=0.1)
+#     assert_allclose(Gamma(summary.shape, summary.rate).variance, 0., rtol=0.0, atol=0.1)
+
+# def _get_posterior_predictive(summary, features):
+#         _features = features[..., None, None, :]
+#         df = 2. * summary.shape
+#         loc = _features.matmul(summary.precision.inverse()).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+#         term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(summary.precision.inverse())
+#                  .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
+#         term1_correct = summary.rate/summary.shape
+#         # term2_correct = 1. + _features.matmul(summary.covariance).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
+#         term2 = 1. + _features.matmul(summary.precision.inverse()).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
+#         scalesquared = term1 * term2 
+#         # scalesquared_correct = term1_correct * term2_correct
+#         assert(torch.all(term1_correct > 0.))
+#         assert(torch.all(term1 > 0.))
+#         assert(torch.all(term2 > 0.))
+#         assert(torch.all(scalesquared > 0.))
         
-        return dist.StudentT(df, loc, torch.sqrt(scalesquared)) # (summary.obs_dim)
+#         return dist.StudentT(df, loc, torch.sqrt(scalesquared)) # (summary.obs_dim)
 
-def test_vanilla_asymptotics():
-    weights = torch.tensor([2., 1.])
-    variance = 10.
-    noise = Normal(0., np.sqrt(variance))
-    summary = NIGNormalRegressionSummary(torch.tensor([0.5, 0.5]),
-                                             torch.tensor([[1., 0.5], [0.5, 1.]]), 3., 1.)
-    for i in range(100):
-        features = torch.rand((1, 2))
-        obs = features.matmul(weights).unsqueeze(-1) + noise.sample(sample_shape=torch.Size([1, 1]))
-        summary.update(obs, features)
-        assert(summary.rate > 0.)
+# def test_vanilla_asymptotics():
+#     weights = torch.tensor([2., 1.])
+#     variance = 10.
+#     noise = Normal(0., np.sqrt(variance))
+#     summary = NIGNormalRegressionSummary(torch.tensor([0.5, 0.5]),
+#                                              torch.tensor([[1., 0.5], [0.5, 1.]]), 3., 1.)
+#     for i in range(100):
+#         features = torch.rand((1, 2))
+#         obs = features.matmul(weights).unsqueeze(-1) + noise.sample(sample_shape=torch.Size([1, 1]))
+#         summary.update(obs, features)
+#         assert(summary.rate > 0.)
 
-def test_nig_downdate():
-    mean = torch.tensor([0.5, 0.5])
-    cov = torch.tensor([[1., 0.5], [0.5, 1.]])
-    shape = torch.tensor(3.)
-    rate = torch.tensor(1.)
-    summary = NIGNormalRegressionSummary(mean, cov, shape, rate)
-    features = torch.rand((51,2))
+# def test_nig_downdate():
+#     mean = torch.zeros((1000, 3, 3))
+#     cov = torch.eye(3).expand((1000, 3, 3, 3)) + 0.5
+#     shape = torch.tensor(3.).expand((1000, 3))
+#     rate = torch.tensor(0.01).expand((1000, 3))
+#     summary = NIGNormalRegressionSummary(mean, cov, shape, rate)
+#     features = torch.rand((51,3))
+#     for i in range(50):
+#         summary.update(features[i+1][None,...],features[i][None,...])
+#     summary.downdate(features[1:], features[:-1], num_forget=torch.tensor(50))
+#     assert(torch.abs(summary.mean - mean).max() < 1.e-6)
+#     assert(torch.abs(summary.covariance - cov).max() < 1.e-6)
+#     assert(torch.abs(summary.shape - shape).max() < 1.e-6)
+#     assert(torch.abs(summary.rate - rate).max() < 1.e-6)
+#     assert(torch.abs(summary.precision_times_mean - cov.inverse().matmul(mean)).max() < 1.e-6)
+#     assert(torch.abs(summary.precision - cov.inverse()).max() < 1.e-6)
+#     # assert(torch.abs(summary.reparametrized_rate -).max() < 1.e-6)
+
+
+def test_nig_scaletril_update():
+    mean = torch.zeros((1000, 3, 3)).clone()
+    scale_tril = torch.cholesky((torch.eye(3).expand((1000, 3, 3, 3)) + 0.5).clone())
+    shape = torch.tensor(3.).expand((1000, 3)).clone()
+    rate = torch.tensor(0.01).expand((1000, 3)).clone()
+    summary = NIGNormalRegressionSummary(mean, scale_tril, shape, rate)
+    features = torch.rand((1000,51,3))
     for i in range(50):
-        summary.update(features[i+1][None,...],features[i][None,...])
-    summary.downdate(features[1:], features[:-1], num_forget=torch.tensor(50))
-
+        summary.update(features[...,i+1,:][...,None,:],features[...,i,:][...,None,:])
+    summary.downdate(features[...,1:,:], features[...,:-1,:], num_forget=torch.tensor(50))
     assert(torch.abs(summary.mean - mean).max() < 1.e-6)
-    assert(torch.abs(summary.covariance - cov).max() < 1.e-6)
+    assert(torch.abs(summary.scale_tril - scale_tril).max() < 1.e-6)
     assert(torch.abs(summary.shape - shape).max() < 1.e-6)
     assert(torch.abs(summary.rate - rate).max() < 1.e-6)
-    # assert(torch.abs(summary.precision_times_mean - cov.inverse().times(mean)).max() < 1.e-6)
-    # assert(torch.abs(summary.precision - cov.inverse()).max() < 1.e-6)
-    # assert(torch.abs(summary.reparametrized_rate -).max() < 1.e-6)
+    a = scale_tril.inverse().tril()
+    assert(torch.abs(summary.precision_times_mean - a.matmul(a.transpose(-2,-1)).matmul(mean.unsqueeze(-1)).squeeze(-1)).max() < 1.e-6)
+    assert(torch.abs(summary.precision - scale_tril.inverse().transpose(-2,-1).matmul(scale_tril.inverse())).max() < 1.e-6)
+
+# def test_nig_scaletril_equal():
+#     mean = torch.zeros((1000, 3, 3)).clone()
+#     cov = (torch.eye(3).expand((1000, 3, 3, 3)) + 0.5).clone()
+#     scale_tril = torch.cholesky(cov)
+#     shape = torch.tensor(3.).expand((1000, 3)).clone()
+#     rate = torch.tensor(0.01).expand((1000, 3)).clone()
+
+#     summary = NIGNormalRegressionSummary(mean, scale_tril, shape, rate)
+#     old_summary = OldNIGNormalRegressionSummary(mean, cov, shape, rate)
+#     features = torch.rand((1000,51,3))
+#     assert(torch.abs(summary.mean - old_summary.mean).max() < 1.e-6)
+#     assert(torch.abs(summary.covariance - old_summary.covariance).max() < 1.e-6)
+#     assert(torch.abs(summary.shape - old_summary.shape).max() < 1.e-6)
+#     assert(torch.abs(summary.rate - old_summary.rate).max() < 1.e-6)
+#     assert(torch.abs(summary.precision_times_mean - old_summary.precision_times_mean).max() < 1.e-6)
+#     assert(torch.abs(summary.precision - old_summary.precision).max() < 1.e-6)
+#     assert(torch.abs(summary.reparametrized_rate - old_summary.reparametrized_rate).max() < 1.e-6)
+
+#     for i in range(50):
+#         old_summary.update(features[...,i+1,:][...,None,:],features[...,i,:][...,None,:])
+#         summary.update(features[...,i+1,:][...,None,:],features[...,i,:][...,None,:])
+#     assert(torch.abs(summary.mean - old_summary.mean).max() < 1.e-6)
+#     assert(torch.abs(summary.covariance - old_summary.covariance).max() < 1.e-6)
+#     assert(torch.abs(summary.shape - old_summary.shape).max() < 1.e-6)
+#     assert(torch.abs(summary.rate - old_summary.rate).max() < 1.e-6)
+#     assert(torch.abs(summary.precision_times_mean - old_summary.precision_times_mean).max() < 1.e-6)
+#     assert(torch.abs(summary.precision - old_summary.precision).max() < 1.e-6)
+#     assert(torch.abs(summary.reparametrized_rate - old_summary.reparametrized_rate).max() < 1.e-6)
+#     summary.downdate(features[...,1:,:], features[...,:-1,:], num_forget=torch.tensor(50))
+#     old_summary.downdate(features[...,1:,:], features[...,:-1,:], num_forget=torch.tensor(50))
+#     assert(torch.abs(summary.mean - old_summary.mean).max() < 1.e-6)
+#     assert(torch.abs(summary.covariance - old_summary.covariance).max() < 1.e-6)
+#     assert(torch.abs(summary.shape - old_summary.shape).max() < 1.e-6)
+#     assert(torch.abs(summary.rate - old_summary.rate).max() < 1.e-6)
+#     assert(torch.abs(summary.precision_times_mean - old_summary.precision_times_mean).max() < 1.e-6)
+#     assert(torch.abs(summary.precision - old_summary.precision).max() < 1.e-6)
+#     assert(torch.abs(summary.reparametrized_rate - old_summary.reparametrized_rate).max() < 1.e-6)
+#     assert(torch.abs(summary.mean - mean).max() < 1.e-6)
+#     assert(torch.abs(summary.scale_tril - scale_tril).max() < 1.e-6)
+#     assert(torch.abs(summary.shape - shape).max() < 1.e-6)
+#     assert(torch.abs(summary.rate - rate).max() < 1.e-6)
+#     a = scale_tril.inverse().tril()
+#     assert(torch.abs(summary.precision_times_mean - a.matmul(a.transpose(-2,-1)).matmul(mean.unsqueeze(-1)).squeeze(-1)).max() < 1.e-6)
+#     assert(torch.abs(summary.precision - scale_tril.inverse().transpose(-2,-1).matmul(scale_tril.inverse())).max() < 1.e-6)
+
+# Why do eigenvalues blow up for some?
+def _get_posterior_predictive(summary, features):
+    _features = features[..., None, None, :]
+    df = 2. * summary.shape
+    cov = summary.scale_tril.matmul(summary.scale_tril.transpose(-2, -1))
+    loc = _features.matmul(cov).matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+    term1 = (summary.reparametrized_rate - 0.5*summary.precision_times_mean.unsqueeze(-2).matmul(cov)
+             .matmul(summary.precision_times_mean.unsqueeze(-1)).squeeze(-1).squeeze(-1))/summary.shape
+    term2 = 1. + _features.matmul(cov).matmul(_features.transpose(-2,-1)).squeeze(-1).squeeze(-1)
+    scalesquared = term1 * term2
+    assert(torch.all(term1 > 0.))
+    assert(torch.all(term2 > 0.))
+    assert(torch.all(scalesquared > 0.))
+    
+    return dist.StudentT(df, loc, torch.sqrt(scalesquared))  # (summary.obs_dim)
+
+def test_posterior_predictive():
+    # Tests the posterior predictive accuracy
+
+    # Draw sigma and weights
+    # Add Gaussian noise
+    assert(True)
+
+def test_zz():
+    particles = 1000
+    latent_dim = 3
+    lag = 200
+    timesteps = 200
+    prior_zz = (torch.zeros((particles, latent_dim, latent_dim)), 
+                torch.cholesky(torch.eye(latent_dim).expand((particles, latent_dim, latent_dim, latent_dim)) + 0.5),
+                1.*#50*
+                torch.tensor(3.).expand(particles, latent_dim), 
+                0.01 *
+                torch.tensor(1.).expand(particles, latent_dim))
+    summary = NIGNormalRegressionSummary(*prior_zz)
+    # Check the eigenvalues of a covariance matrix
+    history = torch.zeros((particles, timesteps + 1, latent_dim))
+    features = torch.zeros((particles, latent_dim))
+    for i in range(timesteps):
+        print(i)
+        student_t = _get_posterior_predictive(summary, features)
+        print("Features mean: ", features.mean())
+        print("Features, Max: ", features.max())
+        print("Features Min: ", features.min())
+        print("Variance mean: ", student_t.variance.mean())
+        print("Variance Max: ", student_t.variance.max())
+        print("Variance Min: ", student_t.variance.min())
+        obs = student_t.sample()
+        assert(obs.shape == (1000,3))
+        old_rate = summary.rate
+        summary.update(obs[..., None, :], features[..., None, :])
+        features = obs.clone()
+        assert(torch.all(summary.rate >= old_rate))
+        history[:,i+1,:] = obs.clone()
+        if i >= lag:
+            print("DOWNDATE")
+            old_rate = summary.rate
+            summary.downdate(history[:,i+1-lag,:][...,None,:], history[:,i-lag,:][...,None,:])
+            assert(torch.all(summary.rate <= old_rate))
+            assert(not torch.all(history[:,i+1-lag,:] == history[:,i-lag,:]))
+            # This should enforce equivalence between the downdated guy with a fresh prior
+            fresh_summary = NIGNormalRegressionSummary(*prior_zz)
+            obs = history[:,i-lag+2:i+2,:]
+            assert(obs.size(1) == lag)
+            assert(not torch.all(obs[:,-1,:] == 0.))
+            fresh_summary.update(history[:,i-lag+2:i+2,:], history[:,i-lag+1:i+1,:])
+            # assert(torch.abs(fresh_summary.mean - summary.mean).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.covariance - summary.covariance).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.shape - summary.shape).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.rate - summary.rate).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.precision - summary.precision).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.precision_times_mean - summary.precision_times_mean).max() < 1.e-6)
+            # assert(torch.abs(fresh_summary.reparametrized_rate - summary.reparametrized_rate).max() < 1.e-6)
+        print("Cov Condition: ", max([summary.covariance[j,0,:,:].symeig().eigenvalues.max()/summary.covariance[j,0,:,:].symeig().eigenvalues.min() for j in range(1000)]))
+            # print("Fresh Cov Condition: ", max([fresh_summary.covariance[j,0,:,:].symeig().eigenvalues.max()/fresh_summary.covariance[j,0,:,:].symeig().eigenvalues.min() for j in range(1000)]))
+        print("Rate Mean: ", torch.mean(summary.rate))
+        print("Rate Max: ", summary.rate.max())
+        print("Rate Min: ", summary.rate.min())            
+        print("Mean Mean: ", torch.mean(summary.mean))
+        print("Mean Max: ", summary.mean.max())
+        print("Mean Min: ", summary.mean.min())
+
+
+        if i >400:
+            print("Cov Condition: ", max([summary.covariance[j,0,:,:].symeig().eigenvalues.max()/summary.covariance[j,0,:,:].symeig().eigenvalues.min() for j in range(1000)]))
+            print("Fresh Cov Condition: ", max([fresh_summary.covariance[j,0,:,:].symeig().eigenvalues.max()/fresh_summary.covariance[j,0,:,:].symeig().eigenvalues.min() for j in range(1000)]))
+
+def test_stochastic_downdate():
+    pass
 
 
 
